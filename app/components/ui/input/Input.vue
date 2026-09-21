@@ -1,0 +1,2 @@
+<script setup lang="ts">import { cn } from '@/lib/utils'; const props = defineProps<{ class?: string }>(); const model = defineModel<string>()</script>
+<template><input v-model="model" :class="cn('flex h-11 w-full rounded-xl border border-[#d9d9d3] bg-white px-3 py-2 text-base outline-none placeholder:text-[#8a8d95] focus:border-[#4b68ff] focus:ring-2 focus:ring-[#4b68ff]/15', props.class)" /></template>
