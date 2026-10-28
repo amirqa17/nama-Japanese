@@ -1,31 +1,20 @@
-# NAMA
+# Breathe
 
-NAMA is a conversation-first Japanese practice app built with Nuxt 4, Vue 3, TypeScript, Tailwind CSS, and source-owned shadcn-vue-style components on Reka UI.
+A personal, browser-local habit tracker for Smoking, Oranges, and Sweets.
 
-## Product principles
+## Development
 
-- The core curriculum is researched, curated, and bundled with the app. It never depends on AI.
-- Lessons are organized by situation and conversational purpose, not JLPT level.
-- Every situation includes casual/polite dialogue, audio, reusable spoken patterns, explanations, and default examples.
-- Optional AI generation adds three new examples to a selected pattern; it never replaces the default content.
+Run `npm ci`, then `npm run dev`. Validate using `npx vue-tsc --noEmit` and `npm run build`.
 
-## Bring-your-own Gemini key
+## Features
 
-Users can enable **AI example variations** in Settings and enter their own Gemini API key. The key is sent to the Nuxt server route only for the requested generation and is not saved server-side. By default the browser stores it in `sessionStorage`; users can explicitly choose device persistence in `localStorage`.
+- Independent local start dates, craving events, trigger tags and daily mood check-ins.
+- Smoking recovery milestones linked to CDC/NHS sources, with explicit uncertainty and no fabricated vitals.
+- Practical daily prompts for each habit, three-minute pause timer and seven-day event chart.
+- Yen savings estimates from configurable smoking habits.
+- JSON backup export and validated restore of all three trackers.
+- No account, backend data collection, analytics, push reminders or cloud sync.
 
-## Commands
+Data uses localStorage key `breathe-v2`; the prior single-tracker `breathe-v1` shape can be migrated. Old NAMA learning data is not touched. Historical Japanese app code remains available in Git history. Production remains the existing `nama-japanese` Vercel project and URL.
 
-```bash
-npm install
-npm run dev
-npm run build
-```
-
-## Research basis
-
-The curriculum direction is informed by the Corpus of Everyday Japanese Conversation (CEJC), a balanced corpus of naturally occurring daily interactions. All shipped dialogues are original and do not reproduce corpus transcripts or redistribute corpus data.
-
-- Koiso et al. (2022), *Design and Evaluation of the Corpus of Everyday Japanese Conversation*, LREC 2022.
-- National Institute for Japanese Language and Linguistics, CEJC project and vocabulary-table documentation.
-
-Confirm licensing before directly incorporating CEJC datasets or transcript material into a commercial release.
+Health milestones are educational population-level information for cigarette cessation, not measured vitals or individual predictions. Support prompts do not diagnose conditions. The Oranges label is deliberately neutral throughout this app.

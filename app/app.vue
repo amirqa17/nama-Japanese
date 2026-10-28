@@ -1,183 +1,76 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ArrowLeft, Bookmark, Check, ChevronRight, Eye, EyeOff, KeyRound, Library, Loader2, Pause, Play, Search, Settings, Sparkles, Volume2 } from '@lucide/vue'
-import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
-import furiganaReadings from '@/data/furigana.generated.json'
-import { conversationCount, topics } from '@/data/curriculum'
-import type { Conversation, DialogueLine, Tone, Topic } from '@/data/curriculum'
-
-type Screen = 'topics' | 'topic' | 'practice'
-type GeneratedExample = { japanese: string; english: string; naturalNote: string }
-
-const screen = ref<Screen>('topics')
-const selectedTopicId = ref(topics[0]!.id)
-const selectedConversationId = ref(topics[0]!.conversations[0]!.id)
-const tone = ref<Tone>('casual')
-const showFurigana = ref(false)
-const hideEnglish = ref(false)
-const query = ref('')
-const saved = ref<string[]>([])
-const settingsOpen = ref(false)
-const aiEnabled = ref(false)
-const apiKey = ref('')
-const rememberKey = ref(false)
-const generating = ref(false)
-const generated = ref<GeneratedExample[]>([])
-const toast = ref('')
-const playing = ref(false)
-const activeLine = ref<number | null>(null)
-let playbackRun = 0
-
-const keyStorage = 'nama-gemini-key'
-const selectedTopic = computed<Topic>(() => topics.find((item) => item.id === selectedTopicId.value) ?? topics[0]!)
-const selectedConversation = computed<Conversation>(() => selectedTopic.value.conversations.find((item) => item.id === selectedConversationId.value) ?? selectedTopic.value.conversations[0]!)
-const dialogue = computed<DialogueLine[]>(() => selectedConversation.value[tone.value])
-const filteredTopics = computed(() => {
-  const value = query.value.trim().toLowerCase()
-  return value ? topics.filter((item) => `${item.title} ${item.japanese} ${item.description}`.toLowerCase().includes(value)) : topics
-})
-const isSaved = computed(() => saved.value.includes(selectedConversation.value.id))
-
-onMounted(() => {
-  saved.value = JSON.parse(localStorage.getItem('nama-saved-v2') || '[]')
-  aiEnabled.value = localStorage.getItem('nama-ai-enabled') === 'true'
-  rememberKey.value = localStorage.getItem('nama-remember-key') === 'true'
-  apiKey.value = rememberKey.value ? localStorage.getItem(keyStorage) || '' : sessionStorage.getItem(keyStorage) || ''
-})
-onBeforeUnmount(stopAudio)
-
-watch([aiEnabled, rememberKey, apiKey], () => {
-  if (!import.meta.client) return
-  localStorage.setItem('nama-ai-enabled', String(aiEnabled.value))
-  localStorage.setItem('nama-remember-key', String(rememberKey.value))
-  if (rememberKey.value) { localStorage.setItem(keyStorage, apiKey.value); sessionStorage.removeItem(keyStorage) }
-  else { sessionStorage.setItem(keyStorage, apiKey.value); localStorage.removeItem(keyStorage) }
-})
-watch([selectedConversationId, tone], () => { stopAudio(); generated.value = [] })
-
-function notify(message: string) { toast.value = message; window.setTimeout(() => { if (toast.value === message) toast.value = '' }, 2200) }
-function furiganaHtml(text: string) { return showFurigana.value ? (furiganaReadings as Record<string, string>)[text] ?? text : text }
-function chooseTopic(item: Topic) { selectedTopicId.value = item.id; selectedConversationId.value = item.conversations[0]!.id; screen.value = 'topic'; window.scrollTo({ top: 0, behavior: 'smooth' }) }
-function chooseConversation(item: Conversation) { selectedConversationId.value = item.id; screen.value = 'practice'; window.scrollTo({ top: 0, behavior: 'smooth' }) }
-function goBack() { stopAudio(); screen.value = screen.value === 'practice' ? 'topic' : 'topics'; window.scrollTo({ top: 0, behavior: 'smooth' }) }
-function toggleSaved() {
-  const id = selectedConversation.value.id
-  saved.value = saved.value.includes(id) ? saved.value.filter((item) => item !== id) : [...saved.value, id]
-  localStorage.setItem('nama-saved-v2', JSON.stringify(saved.value)); notify(saved.value.includes(id) ? 'Saved' : 'Removed from saved')
-}
-
-function stopAudio() {
-  playbackRun += 1
-  if (import.meta.client && 'speechSynthesis' in window) window.speechSynthesis.cancel()
-  playing.value = false; activeLine.value = null
-}
-function japaneseVoice() {
-  const voices = window.speechSynthesis.getVoices()
-  return voices.find((voice) => voice.lang === 'ja-JP') ?? voices.find((voice) => voice.lang.toLowerCase().startsWith('ja'))
-}
-function utter(text: string, lineIndex: number, run: number) {
-  return new Promise<void>((resolve) => {
-    if (run !== playbackRun) return resolve()
-    const speech = new SpeechSynthesisUtterance(text)
-    speech.lang = 'ja-JP'; speech.rate = 0.82; speech.pitch = 1
-    const voice = japaneseVoice(); if (voice) speech.voice = voice
-    activeLine.value = lineIndex
-    speech.onend = () => resolve(); speech.onerror = () => resolve()
-    window.speechSynthesis.speak(speech)
-  })
-}
-async function speakLine(text: string, lineIndex: number) {
-  if (!('speechSynthesis' in window)) return notify('Speech is not supported in this browser')
-  stopAudio(); const run = playbackRun; playing.value = true
-  await utter(text, lineIndex, run)
-  if (run === playbackRun) { playing.value = false; activeLine.value = null }
-}
-async function playDialogue() {
-  if (!('speechSynthesis' in window)) return notify('Speech is not supported in this browser')
-  if (playing.value) return stopAudio()
-  window.speechSynthesis.cancel(); playbackRun += 1; const run = playbackRun; playing.value = true
-  for (let index = 0; index < dialogue.value.length; index += 1) {
-    if (run !== playbackRun) break
-    await utter(dialogue.value[index]!.japanese, index, run)
-    if (run === playbackRun && index < dialogue.value.length - 1) await new Promise((resolve) => window.setTimeout(resolve, 280))
-  }
-  if (run === playbackRun) { playing.value = false; activeLine.value = null }
-}
-async function generateMore() {
-  if (!apiKey.value.trim()) { settingsOpen.value = true; return notify('Add your Gemini API key in settings') }
-  generating.value = true
-  try {
-    const result = await $fetch<{ examples: GeneratedExample[] }>('/api/examples', { method: 'POST', body: { apiKey: apiKey.value.trim(), pattern: selectedConversation.value.keyPhrase, meaning: selectedConversation.value.keyMeaning, scene: `${selectedTopic.value.title}: ${selectedConversation.value.title}`, tone: tone.value } })
-    generated.value = result.examples; notify('Three extra examples added')
-  } catch (error: any) { notify(error?.data?.statusMessage || 'Could not generate examples—check your key') }
-  finally { generating.value = false }
-}
+import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
+import { milestones, tips } from './data/recovery'
+type Habit = 'smoking' | 'oranges' | 'sweets'
+const habit = ref<Habit>('smoking')
+const habitNames = { smoking: 'Smoking', oranges: 'Oranges', sweets: 'Sweets' }
+type Entry = { at: number; trigger: string }
+type State = { start: string; cigarettes: number; packPrice: number; packSize: number; reason: string; nicotine: boolean; entries: Entry[]; moods: Record<string,string> }
+const fresh = (): State => ({ start: '', cigarettes: 10, packPrice: 600, packSize: 20, reason: '', nicotine: false, entries: [], moods: {} })
+const profiles = ref<Record<Habit,State>>({ smoking:fresh(), oranges:fresh(), sweets:fresh() })
+const state = computed({get:()=>profiles.value[habit.value],set:(value:State)=>{profiles.value[habit.value]=value}})
+const ready = ref(false), settings = ref(false), tab = ref('today'), now = ref(Date.now()), error = ref(''), notice = ref(''), trigger = ref(''), timerEnd = ref(0), draft = ref(fresh())
+const localDate = (t: number) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
+const localInput = (t: number) => { const d = new Date(t); return `${localDate(t)}T${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}` }
+const habitTips = computed(() => habit.value==='smoking' ? tips : habit.value==='oranges' ? ['Keep your phone away from your bed tonight. Make the easier choice the one you want.', 'Notice the situation behind an urge: stress, boredom, being alone, or a late night.', 'Choose a replacement before the urge arrives: a walk, a shower, reading, or messaging a friend.', 'An urge is not a failure. You can notice it without acting on it.', 'Reduce access to your usual triggers. Use content filters or app limits if they help.', 'Protect your sleep routine. Leave screens outside the bedroom when possible.', 'A setback is information, not a verdict. Learn the trigger and choose your next step.'] : ['Plan a satisfying meal so hunger does not catch you off guard.', 'Keep a snack you enjoy ready: fruit, plain yogurt, or nuts if they suit you.', 'Notice whether the urge follows hunger, stress, or a routine. Different triggers need different responses.', 'Decide what you mean by sweets. Whole fruit does not need to be part of your restriction.', 'Keep water or an unsweetened drink handy when a sugary-drink cue appears.', 'Skip punishment or compensating after a sweet. Return to your usual balanced meals.', 'Choose one easy change in your shopping routine that supports your goal.'])
+const habitCard = computed(() => ({title:habit.value==='oranges' ? 'Build a little space around the urge.' : 'Make your next choice easier.',body:habit.value==='oranges' ? 'There is no fixed biological reset countdown. Focus on your routines, the triggers you notice, and actions that fit your values. An unwanted thought is not a setback.' : 'There is no reliable day-by-day sugar detox timeline. Appetite and energy depend on meals, sleep and many other factors. Regular, balanced meals can support your goal.'}))
+const today = computed(() => localDate(now.value)), startMs = computed(() => new Date(state.value.start).getTime()), elapsed = computed(() => Math.max(0,now.value-startMs.value)), days = computed(() => Math.floor(elapsed.value/86400000)), day = computed(() => days.value+1), planned = computed(() => startMs.value > now.value)
+const todays = computed(() => state.value.entries.filter(e => localDate(e.at)===today.value)), total = computed(() => state.value.entries.length)
+const active = computed(() => [...milestones].reverse().find(m => elapsed.value/3600000 >= m.hours) || milestones[0]!)
+const next = computed(() => milestones.find(m => m.hours > elapsed.value/3600000))
+const saved = computed(() => elapsed.value/86400000*state.value.cigarettes*state.value.packPrice/state.value.packSize)
+const remaining = computed(() => Math.max(0,Math.ceil((timerEnd.value-now.value)/1000))), clock = computed(() => `${Math.floor(remaining.value/60)}:${String(remaining.value%60).padStart(2,'0')}`)
+const week = computed(() => Array.from({length:7},(_,i) => { const d=new Date(now.value); d.setDate(d.getDate()-6+i); const key=localDate(d.getTime()); return {key,label:d.toLocaleDateString(undefined,{weekday:'short'}),count:state.value.entries.filter(e=>localDate(e.at)===key).length} }))
+const maxCount = computed(() => Math.max(1,...week.value.map(d=>d.count)))
+const topTrigger = computed(() => { const counts:Record<string,number>={}; state.value.entries.forEach(e=>{if(e.trigger) counts[e.trigger]=(counts[e.trigger]||0)+1}); return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0] })
+function trapFocus(event:KeyboardEvent){if(event.key!=='Tab')return;const root=event.currentTarget as HTMLElement;const items=Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select,a[href]')).filter(e=>e.offsetParent!==null);const first=items[0],last=items.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}}
+watch(settings,async value=>{await nextTick();if(value)document.querySelector<HTMLElement>('.modal .close')?.focus();else document.querySelector<HTMLElement>('.settings-button')?.focus()})
+function openSettings(){ draft.value=JSON.parse(JSON.stringify(state.value)); if(!draft.value.start) draft.value.start=localInput(Date.now()); settings.value=true; error.value='' }
+function saveSettings(){ if(!draft.value.start || !Number.isFinite(new Date(draft.value.start).getTime())){error.value='Choose a valid start date and time.';return} if(draft.value.cigarettes<0 || draft.value.packPrice<0 || draft.value.packSize<1){error.value='Check your smoking and pack details.';return} state.value={...draft.value,entries:state.value.entries,moods:state.value.moods}; settings.value=false }
+function log(){ state.value.entries.push({at:Date.now(),trigger:trigger.value}); notice.value='Craving logged. Take this moment one breath at a time.' }
+function undo(){const last=todays.value.at(-1);if(last){state.value.entries.splice(state.value.entries.lastIndexOf(last),1);notice.value='Last craving removed.'}}
+function exportData(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({profiles:profiles.value,habit:habit.value},null,2)],{type:'application/json'}));a.download=`breathe-${today.value}.json`;a.click();URL.revokeObjectURL(a.href)}
+async function importData(event:Event){try { const file=(event.target as HTMLInputElement).files?.[0];if(!file)return;const s=JSON.parse(await file.text());if(!s.profiles || !['smoking','oranges','sweets'].every(k=>valid(s.profiles[k])))throw Error();profiles.value=s.profiles;notice.value='Your backup has been restored.';settings.value=false }catch{error.value='That file is not a valid Breathe backup.'}}
+function valid(s:any):s is State {return s && typeof s.start==='string' && (!s.start || Number.isFinite(new Date(s.start).getTime())) && ['cigarettes','packPrice','packSize'].every(k=>Number.isFinite(s[k])&&s[k]>=0) && s.packSize>=1 && typeof s.reason==='string' && typeof s.nicotine==='boolean' && Array.isArray(s.entries) && s.entries.every((e:any)=>Number.isFinite(e.at)&&typeof e.trigger==='string') && s.moods && typeof s.moods==='object' && !Array.isArray(s.moods) && Object.values(s.moods).every(v=>typeof v==='string') }
+let ticker:ReturnType<typeof setInterval>
+onMounted(()=>{try{const raw=localStorage.getItem('breathe-v2') || localStorage.getItem('breathe-v1');if(raw){const s=JSON.parse(raw);if(s.profiles && ['smoking','oranges','sweets'].every(k=>valid(s.profiles[k]))) { profiles.value=s.profiles; if(['smoking','oranges','sweets'].includes(s.habit))habit.value=s.habit } else if(valid(s))state.value=s;else error.value='Saved data could not be read. Restore a backup in settings.'}}catch{error.value='Device storage is unavailable. Keep this page open and export a backup.'}ready.value=true;ticker=setInterval(()=>now.value=Date.now(),1000)})
+onUnmounted(()=>clearInterval(ticker))
+watch([profiles,habit],()=>{if(ready.value)try{localStorage.setItem('breathe-v2',JSON.stringify({profiles:profiles.value,habit:habit.value}))}catch{error.value='Your changes could not be saved on this device. Export a backup.'}},{deep:true})
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#f6f5f0] text-[#15171d] selection:bg-[#d5f56c]">
-    <header class="sticky top-0 z-40 border-b border-black/10 bg-[#f6f5f0]/95 backdrop-blur">
-      <div class="mx-auto flex h-16 w-[calc(100%_-_2rem)] max-w-[1200px] items-center justify-between gap-3">
-        <button class="flex items-center gap-2.5" aria-label="Back to topics" @click="screen = 'topics'; stopAudio()"><span class="grid size-9 -rotate-2 place-items-center rounded-xl bg-[#15171d] font-black text-[#ff705c]">N</span><span class="font-extrabold tracking-[.08em]">NAMA</span></button>
-        <div class="flex items-center gap-2">
-          <label class="hidden items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm font-semibold sm:flex"><span>ふりがな</span><Switch v-model="showFurigana" aria-label="Show furigana" /></label>
-          <Button class="sm:hidden" variant="outline" size="icon" :aria-label="showFurigana ? 'Hide furigana' : 'Show furigana'" @click="showFurigana = !showFurigana"><span class="text-xs font-bold">あ</span></Button>
-          <Dialog v-model:open="settingsOpen">
-            <DialogTrigger><Button variant="outline" size="icon" aria-label="Open settings"><Settings class="size-4" /></Button></DialogTrigger>
-            <DialogContent><DialogTitle>Settings</DialogTitle><DialogDescription>The 300 built-in conversations work without AI. A Gemini key only adds optional examples.</DialogDescription>
-              <div class="mt-6 space-y-5"><div class="flex items-start justify-between gap-6 rounded-2xl border border-black/10 bg-white p-4"><div><p class="font-semibold">Extra AI examples</p><p class="mt-1 text-sm leading-5 text-[#6d7079]">Generate three variations for the phrase in the current lesson.</p></div><Switch v-model="aiEnabled" aria-label="Enable AI examples" /></div>
-                <div v-if="aiEnabled" class="space-y-3"><label for="api-key" class="flex items-center gap-2 text-sm font-semibold"><KeyRound class="size-4" /> Gemini API key</label><Input id="api-key" v-model="apiKey" type="password" autocomplete="off" placeholder="AIza…" /><label class="flex items-start gap-3 rounded-2xl bg-[#e9ecff] p-3 text-sm leading-5"><Switch v-model="rememberKey" class="mt-0.5" /><span><strong>Remember on this device</strong><br><span class="text-[#606574]">Off keeps it only for this browser session.</span></span></label></div>
-                <Button class="w-full" @click="settingsOpen = false">Done</Button></div>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
-    </header>
-
-    <main class="mx-auto w-[calc(100%_-_2rem)] max-w-[1200px] pb-24 pt-8 sm:pt-12">
-      <template v-if="screen === 'topics'">
-        <div class="mb-8 grid gap-6 md:grid-cols-[1fr_380px] md:items-end"><div><p class="mb-2 text-sm font-bold text-[#5f6370]">{{ topics.length }} topics · {{ conversationCount }} short conversations</p><h1 class="text-4xl font-black tracking-[-.045em] sm:text-6xl">What do you want<br class="hidden sm:block"> to practice?</h1></div><label class="relative block"><Search class="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-[#757983]" /><Input v-model="query" class="h-13 rounded-2xl bg-white pl-12 text-base" placeholder="Search topics…" /></label></div>
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <button v-for="item in filteredTopics" :key="item.id" class="group min-h-[190px] rounded-[26px] border border-black/10 bg-white p-6 text-left shadow-[0_8px_28px_rgba(20,22,28,.05)] transition hover:-translate-y-1 hover:shadow-[0_16px_34px_rgba(20,22,28,.1)]" @click="chooseTopic(item)">
-            <div class="flex items-start justify-between"><span class="grid size-12 place-items-center rounded-2xl text-2xl" :style="{ backgroundColor: `${item.color}22` }">{{ item.icon }}</span><span class="text-xs font-bold text-[#8b8e96]">{{ item.number }}</span></div>
-            <div class="mt-6 flex items-end justify-between gap-4"><div><p lang="ja" class="text-sm font-bold" :style="{ color: item.color }">{{ item.japanese }}</p><h2 class="mt-1 text-xl font-extrabold">{{ item.title }}</h2><p class="mt-2 text-sm leading-5 text-[#6c7079]">{{ item.description }}</p></div><ChevronRight class="mb-1 size-5 shrink-0 transition group-hover:translate-x-1" /></div>
-          </button>
-        </div><p v-if="!filteredTopics.length" class="rounded-3xl border border-dashed border-black/20 p-12 text-center text-[#6c7079]">No matching topics.</p>
-      </template>
-
-      <template v-else-if="screen === 'topic'">
-        <button class="mb-7 flex items-center gap-2 text-sm font-bold text-[#60636d] hover:text-black" @click="goBack"><ArrowLeft class="size-4" /> All topics</button>
-        <div class="mb-8 flex items-start gap-5"><span class="grid size-16 shrink-0 place-items-center rounded-3xl text-3xl" :style="{ backgroundColor: `${selectedTopic.color}22` }">{{ selectedTopic.icon }}</span><div><p lang="ja" class="font-bold" :style="{ color: selectedTopic.color }">{{ selectedTopic.japanese }}</p><h1 class="mt-1 text-4xl font-black tracking-[-.04em]">{{ selectedTopic.title }}</h1><p class="mt-2 max-w-2xl text-[#686c75]">Choose one of the 10 short conversations.</p></div></div>
-        <div class="grid gap-3 md:grid-cols-2">
-          <button v-for="(item, index) in selectedTopic.conversations" :key="item.id" class="group flex min-h-[118px] items-center gap-4 rounded-2xl border border-black/10 bg-white p-5 text-left transition hover:-translate-y-0.5 hover:border-black/25" @click="chooseConversation(item)">
-            <span class="grid size-10 shrink-0 place-items-center rounded-xl bg-[#f0efe9] text-sm font-black">{{ String(index + 1).padStart(2, '0') }}</span><div class="min-w-0 flex-1"><h2 class="font-extrabold">{{ item.title }}</h2><p lang="ja" class="mt-2 truncate font-['Noto_Sans_JP'] text-sm text-[#646873]">{{ item.casual[0]?.japanese }}</p></div><Check v-if="saved.includes(item.id)" class="size-4 text-[#6d8c00]" /><ChevronRight v-else class="size-5 text-[#9a9ca2] transition group-hover:translate-x-1" />
-          </button>
-        </div>
-      </template>
-
-      <template v-else>
-        <button class="mb-7 flex items-center gap-2 text-sm font-bold text-[#60636d] hover:text-black" @click="goBack"><ArrowLeft class="size-4" /> {{ selectedTopic.title }}</button>
-        <div class="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <aside class="order-2 lg:order-1"><div class="sticky top-24 rounded-3xl border border-black/10 bg-white p-3"><p class="px-3 pb-3 pt-2 text-xs font-extrabold uppercase tracking-[.12em] text-[#797c85]">10 conversations</p><button v-for="(item, index) in selectedTopic.conversations" :key="item.id" class="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm transition" :class="item.id === selectedConversation.id ? 'bg-[#15171d] font-bold text-white' : 'hover:bg-[#f3f2ed]'" @click="chooseConversation(item)"><span class="text-xs opacity-55">{{ String(index + 1).padStart(2, '0') }}</span><span class="truncate">{{ item.title }}</span></button></div></aside>
-          <section class="order-1 min-w-0 lg:order-2">
-            <div class="overflow-hidden rounded-[28px] border border-black/10 bg-white shadow-[0_18px_50px_rgba(20,22,28,.08)]">
-              <div class="flex flex-col gap-5 border-b border-black/10 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-7"><div><div class="flex items-center gap-2 text-xs font-bold" :style="{ color: selectedTopic.color }"><span>{{ selectedTopic.icon }}</span><span>{{ selectedTopic.japanese }}</span></div><h1 class="mt-2 text-3xl font-black tracking-[-.035em]">{{ selectedConversation.title }}</h1></div><div class="flex gap-2"><Button variant="outline" size="icon" :aria-label="isSaved ? 'Remove saved lesson' : 'Save lesson'" @click="toggleSaved"><Check v-if="isSaved" class="size-4" /><Bookmark v-else class="size-4" /></Button><Button variant="outline" size="icon" :aria-label="hideEnglish ? 'Show English' : 'Hide English'" @click="hideEnglish = !hideEnglish"><Eye v-if="hideEnglish" class="size-4" /><EyeOff v-else class="size-4" /></Button><Button @click="playDialogue"><Pause v-if="playing" class="mr-2 size-4" /><Play v-else class="mr-2 size-4" />{{ playing ? 'Stop' : 'Play dialogue' }}</Button></div></div>
-              <div class="border-b border-black/10 bg-[#faf9f5] p-4 sm:px-7"><div class="inline-flex rounded-xl bg-[#e9e8e3] p-1" role="group" aria-label="Conversation tone"><button v-for="item in (['casual', 'polite'] as const)" :key="item" class="rounded-lg px-5 py-2 text-sm font-bold capitalize" :class="tone === item ? 'bg-white shadow-sm' : 'text-[#747780]'" @click="tone = item">{{ item }}</button></div></div>
-              <div class="space-y-5 p-5 sm:p-8"><div v-for="(line, index) in dialogue" :key="`${selectedConversation.id}-${tone}-${index}`" class="grid grid-cols-[34px_minmax(0,1fr)_42px] items-start gap-3"><span class="grid size-8 place-items-center rounded-full text-xs font-black text-white" :style="{ backgroundColor: line.speaker === 'A' ? '#15171d' : selectedTopic.color }">{{ line.speaker }}</span><div class="rounded-[5px_20px_20px_20px] p-4 sm:p-5" :class="activeLine === index ? 'ring-2 ring-[#a9cc33]' : ''" :style="{ backgroundColor: line.speaker === 'A' ? '#f0efe9' : `${selectedTopic.color}16` }"><p lang="ja" class="furigana-line font-['Noto_Sans_JP'] text-lg font-semibold leading-9" v-html="furiganaHtml(line.japanese)" /><p v-if="!hideEnglish" class="mt-2 text-sm leading-5 text-[#656a74]">{{ line.english }}</p></div><Button variant="ghost" size="icon" :aria-label="`Pronounce line ${index + 1}`" @click="speakLine(line.japanese, index)"><Volume2 class="size-5" :class="activeLine === index ? 'text-[#799500]' : ''" /></Button></div></div>
-            </div>
-            <div class="mt-5 rounded-3xl bg-[#15171d] p-5 text-white sm:p-7"><div class="flex items-start justify-between gap-4"><div><p class="flex items-center gap-2 text-xs font-extrabold uppercase tracking-[.12em] text-[#d5f56c]"><Library class="size-4" /> Key phrase</p><p lang="ja" class="furigana-line mt-4 font-['Noto_Sans_JP'] text-xl font-bold" v-html="furiganaHtml(selectedConversation.keyPhrase)" /><p class="mt-2 text-sm text-white/65">{{ selectedConversation.keyMeaning }}</p></div><Button v-if="aiEnabled" variant="ghost" size="sm" class="border border-white/15 text-white hover:bg-white/10" :disabled="generating" @click="generateMore"><Loader2 v-if="generating" class="mr-2 size-4 animate-spin" /><Sparkles v-else class="mr-2 size-4 text-[#d5f56c]" />More examples</Button></div><div v-if="generated.length" class="mt-6 grid gap-3 sm:grid-cols-3"><button v-for="example in generated" :key="example.japanese" class="rounded-2xl bg-white/[.08] p-4 text-left hover:bg-white/[.12]" @click="speakLine(example.japanese, -1)"><span lang="ja" class="furigana-line block font-semibold" v-html="furiganaHtml(example.japanese)" /><span v-if="!hideEnglish" class="mt-2 block text-xs leading-4 text-white/60">{{ example.english }}</span><span class="mt-3 block text-xs leading-4 text-[#d5f56c]/80">{{ example.naturalNote }}</span></button></div></div>
-          </section>
-        </div>
-      </template>
-    </main>
-    <Transition enter-active-class="transition" enter-from-class="translate-y-3 opacity-0" leave-active-class="transition" leave-to-class="translate-y-3 opacity-0"><div v-if="toast" class="fixed bottom-7 left-1/2 z-[70] -translate-x-1/2 rounded-full bg-[#15171d] px-4 py-2.5 text-sm font-semibold text-white shadow-xl">{{ toast }}</div></Transition>
-  </div>
+<div class="shell">
+<header><a class="brand" href="/" aria-label="Breathe home"><span class="brand-icon">≈</span> breathe<span class="brand-dot">.</span></a><button class="settings-button" @click="openSettings">Settings <span aria-hidden="true">↗</span></button></header>
+<main v-if="ready">
+<div class="habit-tabs" aria-label="Choose a habit"><button v-for="(name,key) in habitNames" :key="key" :class="{active:habit===key}" :aria-pressed="habit===key" @click="habit=key;trigger='';notice='';timerEnd=0">{{name}} <span v-if="profiles[key].start">•</span></button></div>
+<p v-if="error && !settings" class="alert" role="alert">{{ error }}</p>
+<section v-if="!state.start" class="welcome">
+<div class="eyebrow">A LITTLE MORE FREEDOM, EVERY DAY</div><h1>{{habit==='smoking'?'Your next chapter.':habitNames[habit]+', on your terms.'}}<br><em>A day at a time.</em></h1><p>A quiet place to track your progress, understand your patterns, and get through the next urge.</p><button class="primary" @click="openSettings">Set my start date <span>→</span></button><div class="welcome-note">No account. No pressure. Your progress stays on this device.</div>
+<div class="intro-grid"><div><span>01</span><h3>See your progress</h3><p>Every intentional choice counts.</p></div><div><span>02</span><h3>Ride out a craving</h3><p>Log it, pause, and take a breath.</p></div><div><span>03</span><h3>Know what’s changing</h3><p>Daily guidance for your next step.</p></div></div>
+</section>
+<template v-else>
+<nav aria-label="Main navigation"><button :class="{selected:tab==='today'}" @click="tab='today'">Today</button><button :class="{selected:tab==='journey'}" @click="tab='journey'">Your journey</button></nav>
+<section class="heading"><div><p class="eyebrow">{{ new Date(now).toLocaleDateString(undefined,{weekday:'long',month:'long',day:'numeric'}) }}</p><h1>{{ planned ? 'A fresh start is coming.' : habit==='smoking'?'Room to breathe.':habitNames[habit]+'. A fresh perspective.' }}</h1><p>{{ planned ? 'Get ready at your own pace. Your timer starts on your chosen date.' : 'One day at a time. You’re building something good.' }}</p></div><span class="status"><i></i>{{ planned ? 'Getting ready' : 'Your quit journey' }}</span></section>
+<template v-if="tab==='today'">
+<div class="dashboard">
+<section class="hero card"><p class="eyebrow">{{ planned ? 'YOUR START DATE' : 'TIME SINCE YOUR START' }}</p><template v-if="planned"><h2 class="planned-date">{{new Date(state.start).toLocaleDateString(undefined,{month:'long',day:'numeric'})}}</h2><p>{{new Date(state.start).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})}}</p></template><template v-else><div class="day-number">{{ days }}<span>{{days===1?'day':'days'}}</span></div><p class="elapsed">{{Math.floor(elapsed/3600000)%24}} hours · {{Math.floor(elapsed/60000)%60}} minutes</p></template><div class="hero-line"></div><p class="reason">“{{state.reason || 'I’m making room for what matters to me.'}}”</p><span class="small-label">YOUR REASON TO KEEP GOING</span><div class="orb orb-one"></div><div class="orb orb-two"></div></section>
+<section class="card craving"><div class="card-top"><p class="eyebrow">TODAY’S CRAVINGS</p><span class="pill">Just notice. No judgment.</span></div><div class="craving-number" aria-live="polite">{{todays.length}}<span>logged today</span></div><p>Feeling an urge? Tap once to count it.</p><button class="primary" :disabled="planned" @click="log"><span class="plus">+</span> I’m having a craving</button><div class="trigger-row"><label for="trigger">Trigger <span>(optional)</span></label><select id="trigger" v-model="trigger"><option value="">Choose one</option><option>Stress</option><option>After a meal</option><option v-if="habit==='smoking'">Coffee</option><option v-if="habit!=='smoking'">Late night</option><option v-if="habit==='sweets'">Hunger</option><option v-if="habit==='oranges'">Scrolling</option><option>Boredom</option><option>Social</option><option>Other</option></select><button class="text-button" :disabled="!todays.length" @click="undo">Undo</button></div><p class="sr-only" role="status">{{notice}}</p></section>
+<section v-if="habit==='smoking'" class="card recovery"><div class="card-top"><p class="eyebrow">{{planned?'WHAT TO LOOK FORWARD TO':`YOUR BODY · DAY ${day}`}}</p><span class="leaf" aria-hidden="true">↗</span></div><h2>{{planned?milestones[0]!.title:active.title}}</h2><p>{{planned?milestones[0]!.body:active.body}}</p><div class="recovery-note">Typical changes after stopping cigarettes—not measured vitals. Timing varies{{state.nicotine ? '; nicotine replacement changes the nicotine-withdrawal timeline' : ''}}.</div><a :href="(planned?milestones[0]!:active).source" target="_blank" rel="noopener noreferrer">Read the source ↗</a></section>
+<section v-if="habit!=='smoking'" class="card recovery"><div class="card-top"><p class="eyebrow">{{habitNames[habit].toUpperCase()}} · {{planned?'GETTING READY':`DAY ${day}`}}</p><span class="leaf">↗</span></div><h2>{{habitCard.title}}</h2><p>{{habitCard.body}}</p><a v-if="habit==='sweets'" href="https://www.nhs.uk/live-well/eat-well/food-types/how-does-sugar-in-our-diet-affect-our-health/" target="_blank" rel="noopener noreferrer">NHS guide to sugar ↗</a><div class="recovery-note">Progress follows your chosen actions, not a medical countdown. Setbacks do not erase what you have learned.</div></section>
+<section class="card pause"><p class="eyebrow">A MOMENT FOR YOU</p><h2>{{timerEnd ? remaining ? 'Let the urge pass.' : 'You made space.' : 'Pause before you act.'}}</h2><p>{{timerEnd && !remaining ? 'Check in with yourself. You can repeat the pause if the urge is still here.' : 'Try a short pause. Breathe gently, sip water, or change your surroundings.'}}</p><div v-if="timerEnd" class="timer" aria-live="off">{{clock}}</div><button class="secondary" @click="timerEnd=Date.now()+180000;now=Date.now()">{{timerEnd?'Start another 3 minutes':'Start a 3-minute pause'}} <span>→</span></button><button v-if="remaining" class="text-button" @click="timerEnd=0">End pause</button></section>
+</div>
+<div v-if="habit==='smoking'" class="stats"><div><span class="stat-icon">¥</span><div><strong>¥{{Math.floor(saved).toLocaleString()}}</strong><p>estimated savings</p></div></div><div><span class="stat-icon">↗</span><div><strong>{{Math.floor(elapsed/86400000*state.cigarettes).toLocaleString()}}</strong><p>cigarettes avoided, estimated</p></div></div><div><span class="stat-icon">◌</span><div><strong>{{total}}</strong><p>cravings noticed</p></div></div></div><p v-if="habit==='smoking'" class="estimate-note">Estimates assume no cigarettes since your start date.</p>
+<section class="checkin"><div><p class="eyebrow">YOUR DAILY CHECK-IN</p><h2>How are you feeling today?</h2><p>{{state.moods[today] ? 'Saved for today. You can change it any time.' : 'A small check-in. A little self-awareness.'}}</p></div><div class="moods"><button v-for="m in ['Rough','Okay','Good','Great']" :key="m" :class="{chosen:state.moods[today]===m}" :aria-pressed="state.moods[today]===m" @click="state.moods[today]=m">{{m}}</button></div></section>
+<section class="daily-tip"><span class="eyebrow">TODAY’S SMALL STEP</span><p>{{habitTips[(day-1)%habitTips.length]}}</p></section>
 </template>
-
-<style>
-.furigana-line ruby { ruby-position: over; }
-.furigana-line rt { color: #737780; font-size: .55em; font-weight: 600; }
-</style>
+<template v-else>
+<section class="card history"><p class="eyebrow">THE LAST SEVEN DAYS</p><h2>Your cravings, in perspective.</h2><p>Only the urges you log appear here. Fewer logs don’t necessarily mean fewer cravings.</p><div class="bars"><div v-for="d in week" :key="d.key"><strong>{{d.count}}</strong><div class="bar-space"><div :style="{height:`${Math.max(3,d.count/maxCount*100)}%`}" class="bar"></div></div><span>{{d.label}}</span></div></div><p v-if="topTrigger">Your most logged trigger: <strong>{{topTrigger}}</strong>. Plan a different routine for that moment.</p><div class="mood-history"><span v-for="d in week.filter(d=>state.moods[d.key])" :key="d.key">{{d.label}}: {{state.moods[d.key]}}</span></div></section>
+<section v-if="habit==='smoking'" class="timeline"><p class="eyebrow">RECOVERY TAKES TIME</p><h2>Good changes are ahead.</h2><p>These are population-level milestones, not a diagnosis or a personal health forecast.</p><article v-for="m in milestones" :key="m.hours" :class="{reached:!planned && elapsed/3600000>=m.hours}"><div class="timeline-dot">{{!planned&&elapsed/3600000>=m.hours?'✓':'·'}}</div><div><span class="eyebrow">{{m.label}}</span><h3>{{m.title}}</h3><p>{{m.body}}</p><a :href="m.source" target="_blank" rel="noopener noreferrer">Source ↗</a></div></article></section>
+</template>
+<section v-if="habit==='smoking' && next && !planned && tab==='today'" class="next"><span class="eyebrow">ON THE HORIZON · {{next.label}}</span><p>{{next.title}}</p><button class="text-button" @click="tab='journey'">See your recovery timeline →</button></section>
+</template>
+<footer><span>breathe. <span class="muted">A little more freedom.</span></span><p>Your data stays in this browser. Export a backup before changing devices or clearing browser data. Daily updates appear when you open the app; no push reminders.</p><details><summary>About recovery & support</summary><p>Designed for stopping cigarettes. Timelines do not directly apply to vaping or heated tobacco. Nicotine replacement may help with cravings; ask a clinician or pharmacist about suitable support. This app does not measure heart rate, blood pressure, oxygen or lung function. Symptoms that are severe or concerning need medical attention, rather than being assumed to be withdrawal.</p><a href="https://www.cdc.gov/tobacco/about/benefits-of-quitting.html" target="_blank" rel="noopener noreferrer">CDC recovery information ↗</a> · <a href="https://www.nhs.uk/better-health/quit-smoking/staying-smoke-free/managing-nicotine-withdrawal-symptoms/" target="_blank" rel="noopener noreferrer">NHS withdrawal support ↗</a></details></footer>
+</main><main v-else class="loading">Taking a breath…</main>
+<div v-if="settings" class="overlay" @click.self="settings=false"><section role="dialog" aria-modal="true" aria-labelledby="settings-title" class="modal" @keydown.esc="settings=false" @keydown="trapFocus"><div class="card-top"><h2 id="settings-title">{{habitNames[habit]}}: your fresh start</h2><button class="close" aria-label="Close settings" @click="settings=false">×</button></div><p>Make this journey yours.</p><form @submit.prevent="saveSettings"><label>Start date & time<input v-model="draft.start" type="datetime-local" required></label><p class="field-help">Your local time. Changing this date restarts the timer; your craving history stays.</p><div v-if="habit==='smoking'" class="form-grid"><label>Cigarettes per day<input v-model.number="draft.cigarettes" type="number" min="0" max="200" required></label><label>Pack price (¥)<input v-model.number="draft.packPrice" type="number" min="0" max="100000" required></label><label>Cigarettes per pack<input v-model.number="draft.packSize" type="number" min="1" max="200" required></label></div><label>Your reason for making this change<input v-model="draft.reason" maxlength="160" placeholder="More energy. More freedom. More life."></label><label v-if="habit==='smoking'" class="checkbox"><input v-model="draft.nicotine" type="checkbox"> I’m using nicotine replacement or other nicotine</label><p v-if="error" role="alert" class="alert">{{error}}</p><button class="primary" type="submit">{{state.start?'Save changes':'Begin my journey'}} →</button></form><div class="backup"><button type="button" class="text-button" @click="exportData">Export backup</button><label class="text-button import">Restore backup<input type="file" accept="application/json,.json" @change="importData"></label></div><p class="field-help">Had a setback? You can set a new start time without losing your history. A setback doesn’t erase what you’ve learned.</p></section></div>
+</div>
+</template>

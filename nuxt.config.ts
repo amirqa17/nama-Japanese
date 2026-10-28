@@ -3,21 +3,18 @@ import tailwindcss from '@tailwindcss/vite'
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
-  devtools: { enabled: true },
+  devtools: { enabled: false },
   components: false,
   css: ['~/assets/css/main.css'],
   vite: {
     plugins: [tailwindcss()],
   },
-  runtimeConfig: {
-    geminiApiKey: '',
-  },
   app: {
     head: {
-      title: 'NAMA — Real conversational Japanese',
+      title: 'Breathe — One day at a time',
       meta: [
-        { name: 'description', content: 'Practice the Japanese people actually use in dates, texts, work, and everyday life.' },
-        { name: 'theme-color', content: '#10131a' },
+        { name: 'description', content: 'Your personal space for better habits. Track progress and cravings, one day at a time.' },
+        { name: 'theme-color', content: '#f6f7f2' },
       ],
       link: [{ rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     },
